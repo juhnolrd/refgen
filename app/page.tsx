@@ -21,7 +21,6 @@ interface SourceError {
 const STORAGE_KEY = 'refgen_citations';
 
 
-// Проверяем, является ли строка URL
 function isURL(str: string): boolean {
   try {
     const url = new URL(str);
@@ -32,7 +31,6 @@ function isURL(str: string): boolean {
 }
 
 
-// "дмитрий кот" → "Кот Д."
 function formatAuthorRU(name: string): string {
   const parts = name.trim().split(/\s+/);
   if (parts.length < 2) return name.trim();
@@ -45,10 +43,7 @@ function formatAuthorRU(name: string): string {
 }
 
 
-// Форматируем офлайн-источник по ГОСТ
-// Принимает: "дмитрий кот — название книги" или просто "название книги"
 function formatOfflineBook(input: string): string {
-  // Ищем разделитель между автором и названием: —, -, –
   const match = input.match(/\s[—\-–]\s/);
 
 
@@ -60,7 +55,6 @@ function formatOfflineBook(input: string): string {
     author = input.slice(0, match.index).trim();
     title = input.slice(match.index + match[0].length).trim();
   } else {
-    // Разделителя нет — считаем всё строкой названия
     title = input.trim();
   }
 
@@ -151,7 +145,6 @@ export default function Home() {
 
     try {
       for (const [index, line] of lines.entries()) {
-        // Офлайн-источник — обрабатываем без запроса к серверу
         if (!isURL(line)) {
           try {
             const citation = formatOfflineBook(line);
@@ -171,7 +164,6 @@ export default function Home() {
         }
 
 
-        // Онлайн-источник — парсим через API
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 20_000);
 
@@ -195,20 +187,22 @@ export default function Home() {
           const data: unknown = await response.json();
 
 
-          if (
-            typeof data !== 'object' ||
-            data === null ||
-            !('citation' in data) ||
-            typeof data.citation !== 'string' ||
-            !data.citation.trim()
-          ) {
+          if (typeof data !== 'object' || data === null || !('citation' in data)) {
+            throw new Error('сервер не вернул готовую ссылку');
+          }
+
+
+          const rawCitation = (data as Record<string, unknown>).citation;
+
+
+          if (typeof rawCitation !== 'string' || !rawCitation.trim()) {
             throw new Error('сервер не вернул готовую ссылку');
           }
 
 
           setCitations((previous) => [
             ...previous,
-            { id: crypto.randomUUID(), citation: data.citation.trim() },
+            { id: crypto.randomUUID(), citation: rawCitation.trim() },
           ]);
         } catch (error: unknown) {
           const message = controller.signal.aborted
@@ -411,7 +405,7 @@ export default function Home() {
             </p>
 
 
-            <ol className="mt-4 space-y-3 list-none">
+            <ol className="mt-4 list-none space-y-3">
               {citations.map((item, index) => (
                 <CitationResult
                   key={item.id}
@@ -436,7 +430,7 @@ export default function Home() {
             href="https://t.me/iknowhellsip"
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-[#26B38C] transition-colors"
+            className="transition-colors hover:text-[#26B38C]"
           >
             dev tg: iknowhellsip
           </a>
