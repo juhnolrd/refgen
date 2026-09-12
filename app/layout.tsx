@@ -5,6 +5,9 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'RefGen — Источники ГЭУ',
   description: 'генератор ссылок для библиографии для студентов СПбГЭУ',
+  icons: {
+    icon: '/favicon.ico',
+  },
 };
 
 
