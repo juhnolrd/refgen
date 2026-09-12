@@ -9,6 +9,7 @@ import CitationResult from '@/components/CitationResult';
 interface Citation {
   id: string;
   citation: string;
+  incomplete?: boolean;
 }
 
 
@@ -28,47 +29,6 @@ function isURL(str: string): boolean {
   } catch {
     return false;
   }
-}
-
-
-function formatAuthorRU(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length < 2) return name.trim();
-  const surname = parts[parts.length - 1];
-  const initials = parts
-    .slice(0, -1)
-    .map((p) => p[0].toUpperCase() + '.')
-    .join(' ');
-  return `${surname} ${initials}`;
-}
-
-
-function formatOfflineBook(input: string): string {
-  const match = input.match(/\s[—\-–]\s/);
-
-
-  let author = '';
-  let title = '';
-
-
-  if (match && match.index !== undefined) {
-    author = input.slice(0, match.index).trim();
-    title = input.slice(match.index + match[0].length).trim();
-  } else {
-    title = input.trim();
-  }
-
-
-  if (!title) return input;
-
-
-  if (author) {
-    const formatted = formatAuthorRU(author);
-    return `${formatted} ${title} / ${formatted}.`;
-  }
-
-
-  return `${title}.`;
 }
 
 
@@ -112,7 +72,7 @@ export default function Home() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(citations));
     } catch {
-      // квота заполнена — ничего не делаем
+      // квота заполнена
     }
   }, [citations]);
 
@@ -146,20 +106,89 @@ export default function Home() {
     try {
       for (const [index, line] of lines.entries()) {
         if (!isURL(line)) {
+          const dividerMatch = line.match(/\s*[—\-–]\s*/);
+
+
+          let author = '';
+          let title = '';
+
+
+          if (dividerMatch && dividerMatch.index !== undefined) {
+            author = line.slice(0, dividerMatch.index).trim();
+            title = line
+              .slice(dividerMatch.index + dividerMatch[0].length)
+              .trim();
+          } else {
+            title = line.trim();
+          }
+
+
+          if (!title) {
+            setErrors((previous) => [
+              ...previous,
+              { url: line, message: 'не удалось распознать название' },
+            ]);
+            setProgress({ done: index + 1, total: lines.length });
+            continue;
+          }
+
+
           try {
-            const citation = formatOfflineBook(line);
+            const response = await fetch('/api/search-book', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                author: author || 'неизвестный автор',
+                title,
+              }),
+            });
+
+
+            if (!response.ok) {
+              throw new Error('не удалось найти книгу');
+            }
+
+
+            const data: unknown = await response.json();
+
+
+            if (
+              typeof data !== 'object' ||
+              data === null ||
+              !('citation' in data)
+            ) {
+              throw new Error('сервер не вернул готовую ссылку');
+            }
+
+
+            const result = data as Record<string, unknown>;
+            const rawCitation = result.citation;
+            const isIncomplete = result.incomplete === true;
+
+
+            if (typeof rawCitation !== 'string' || !rawCitation.trim()) {
+              throw new Error('сервер не вернул готовую ссылку');
+            }
+
+
             setCitations((previous) => [
               ...previous,
-              { id: crypto.randomUUID(), citation },
+              {
+                id: crypto.randomUUID(),
+                citation: rawCitation.trim(),
+                incomplete: isIncomplete,
+              },
             ]);
           } catch {
             setErrors((previous) => [
               ...previous,
-              { url: line, message: 'не удалось оформить источник' },
+              { url: line, message: 'не удалось найти или оформить книгу' },
             ]);
           } finally {
             setProgress({ done: index + 1, total: lines.length });
           }
+
+
           continue;
         }
 
@@ -187,7 +216,11 @@ export default function Home() {
           const data: unknown = await response.json();
 
 
-          if (typeof data !== 'object' || data === null || !('citation' in data)) {
+          if (
+            typeof data !== 'object' ||
+            data === null ||
+            !('citation' in data)
+          ) {
             throw new Error('сервер не вернул готовую ссылку');
           }
 
@@ -356,8 +389,8 @@ export default function Home() {
               ))}
             </ul>
             <p className="mt-4 text-sm text-red-900">
-              остальные результаты сохранены ниже. неудачные источники
-              можно отправить ещё раз отдельно
+              остальные результаты сохранены ниже. неудачные источники можно
+              отправить ещё раз отдельно
             </p>
           </section>
         )}
@@ -399,18 +432,13 @@ export default function Home() {
             </div>
 
 
-            <p className="mt-3 text-sm text-gray-600">
-              порядок — как при добавлении. результаты хранятся только
-              до обновления или закрытия страницы
-            </p>
-
-
             <ol className="mt-4 list-none space-y-3">
               {citations.map((item, index) => (
                 <CitationResult
                   key={item.id}
                   index={index + 1}
                   citation={item.citation}
+                  incomplete={item.incomplete}
                 />
               ))}
             </ol>
