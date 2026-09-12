@@ -5,17 +5,18 @@ import { useState } from 'react';
 
 
 interface Props {
+  index: number;
   citation: string;
 }
 
 
-export default function CitationResult({ citation }: Props) {
+export default function CitationResult({ index, citation }: Props) {
   const [message, setMessage] = useState('');
 
 
   const copyToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(citation);
+      await navigator.clipboard.writeText(`${index}. ${citation}`);
       setMessage('скопировано');
     } catch {
       setMessage('не удалось скопировать — выдели текст вручную');
@@ -24,17 +25,15 @@ export default function CitationResult({ citation }: Props) {
 
 
   return (
-    <article className="mt-4 rounded-xl border border-[#26B38C] bg-white p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <span className="text-sm text-gray-600">
-          библиографическая запись
+    <article className="rounded-xl border border-[#26B38C] bg-white p-5">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <span className="text-sm font-semibold text-[#26B38C] tabular-nums shrink-0">
+          {index}.
         </span>
-
-
         <button
           type="button"
           onClick={copyToClipboard}
-          className="rounded-lg bg-[#26B38C] px-4 py-2 text-sm font-medium text-gray-950 hover:bg-[#229e7c]"
+          className="rounded-lg bg-[#26B38C] px-4 py-2 text-sm font-medium text-gray-950 hover:bg-[#229e7c] shrink-0"
         >
           копировать
         </button>

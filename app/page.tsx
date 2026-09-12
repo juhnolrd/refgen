@@ -1,7 +1,7 @@
 ﻿'use client';
 
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import CitationResult from '@/components/CitationResult';
 
@@ -18,6 +18,66 @@ interface SourceError {
 }
 
 
+const STORAGE_KEY = 'refgen_citations';
+
+
+// Проверяем, является ли строка URL
+function isURL(str: string): boolean {
+  try {
+    const url = new URL(str);
+    return ['http:', 'https:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+
+// "дмитрий кот" → "Кот Д."
+function formatAuthorRU(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length < 2) return name.trim();
+  const surname = parts[parts.length - 1];
+  const initials = parts
+    .slice(0, -1)
+    .map((p) => p[0].toUpperCase() + '.')
+    .join(' ');
+  return `${surname} ${initials}`;
+}
+
+
+// Форматируем офлайн-источник по ГОСТ
+// Принимает: "дмитрий кот — название книги" или просто "название книги"
+function formatOfflineBook(input: string): string {
+  // Ищем разделитель между автором и названием: —, -, –
+  const match = input.match(/\s[—\-–]\s/);
+
+
+  let author = '';
+  let title = '';
+
+
+  if (match && match.index !== undefined) {
+    author = input.slice(0, match.index).trim();
+    title = input.slice(match.index + match[0].length).trim();
+  } else {
+    // Разделителя нет — считаем всё строкой названия
+    title = input.trim();
+  }
+
+
+  if (!title) return input;
+
+
+  if (author) {
+    const formatted = formatAuthorRU(author);
+    return `${formatted} ${title} / ${formatted}.`;
+  }
+
+
+  return `${title}.`;
+}
+
+
 export default function Home() {
   const [input, setInput] = useState('');
   const [citations, setCitations] = useState<Citation[]>([]);
@@ -30,6 +90,39 @@ export default function Home() {
   const running = useRef(false);
 
 
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (
+          Array.isArray(parsed) &&
+          parsed.every(
+            (item) =>
+              typeof item === 'object' &&
+              item !== null &&
+              typeof (item as Citation).id === 'string' &&
+              typeof (item as Citation).citation === 'string',
+          )
+        ) {
+          setCitations(parsed as Citation[]);
+        }
+      }
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  }, []);
+
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(citations));
+    } catch {
+      // квота заполнена — ничего не делаем
+    }
+  }, [citations]);
+
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -37,14 +130,14 @@ export default function Home() {
     if (running.current) return;
 
 
-    const urls = input
+    const lines = input
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
 
 
-    if (urls.length === 0) {
-      setNotice('добавь хотя бы одну ссылку');
+    if (lines.length === 0) {
+      setNotice('добавь хотя бы одну ссылку или источник');
       return;
     }
 
@@ -53,45 +146,48 @@ export default function Home() {
     setLoading(true);
     setErrors([]);
     setNotice('');
-    setProgress({ done: 0, total: urls.length });
+    setProgress({ done: 0, total: lines.length });
 
 
     try {
-      for (const [index, url] of urls.entries()) {
+      for (const [index, line] of lines.entries()) {
+        // Офлайн-источник — обрабатываем без запроса к серверу
+        if (!isURL(line)) {
+          try {
+            const citation = formatOfflineBook(line);
+            setCitations((previous) => [
+              ...previous,
+              { id: crypto.randomUUID(), citation },
+            ]);
+          } catch {
+            setErrors((previous) => [
+              ...previous,
+              { url: line, message: 'не удалось оформить источник' },
+            ]);
+          } finally {
+            setProgress({ done: index + 1, total: lines.length });
+          }
+          continue;
+        }
+
+
+        // Онлайн-источник — парсим через API
         const controller = new AbortController();
-        const timeout = window.setTimeout(
-          () => controller.abort(),
-          20_000
-        );
+        const timeout = window.setTimeout(() => controller.abort(), 20_000);
 
 
         try {
-          let parsedUrl: URL;
-
-
-          try {
-            parsedUrl = new URL(url);
-          } catch {
-            throw new Error('проверь адрес: нужна полная ссылка');
-          }
-
-
-          if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
-            throw new Error('ссылка должна начинаться с https:// или http://');
-          }
-
-
           const response = await fetch('/api/parse', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: parsedUrl.href }),
+            body: JSON.stringify({ url: line }),
             signal: controller.signal,
           });
 
 
           if (!response.ok) {
             throw new Error(
-              'не удалось обработать источник — попробуй другую ссылку'
+              'не удалось обработать источник — попробуй другую ссылку',
             );
           }
 
@@ -110,13 +206,10 @@ export default function Home() {
           }
 
 
-          const result: Citation = {
-            id: crypto.randomUUID(),
-            citation: data.citation.trim(),
-          };
-
-
-          setCitations((previous) => [...previous, result]);
+          setCitations((previous) => [
+            ...previous,
+            { id: crypto.randomUUID(), citation: data.citation.trim() },
+          ]);
         } catch (error: unknown) {
           const message = controller.signal.aborted
             ? 'источник отвечает слишком долго — попробуй позже'
@@ -125,15 +218,16 @@ export default function Home() {
               : 'не удалось обработать источник';
 
 
-          setErrors((previous) => [...previous, { url, message }]);
+          setErrors((previous) => [...previous, { url: line, message }]);
         } finally {
           window.clearTimeout(timeout);
-          setProgress({ done: index + 1, total: urls.length });
+          setProgress({ done: index + 1, total: lines.length });
         }
       }
     } finally {
       running.current = false;
       setLoading(false);
+      setInput('');
     }
   };
 
@@ -149,7 +243,7 @@ export default function Home() {
       setNotice('весь список скопирован');
     } catch {
       setNotice(
-        'браузер не разрешил копирование — выдели и скопируй текст вручную'
+        'браузер не разрешил копирование — выдели и скопируй текст вручную',
       );
     }
   };
@@ -160,6 +254,7 @@ export default function Home() {
     setErrors([]);
     setProgress({ done: 0, total: 0 });
     setNotice('');
+    localStorage.removeItem(STORAGE_KEY);
   };
 
 
@@ -167,18 +262,12 @@ export default function Home() {
     <main className="min-h-screen bg-gray-50 text-gray-900">
       <div className="mx-auto max-w-4xl px-4 py-10 sm:py-14">
         <header className="mb-8 text-center">
-          <h1 className="mb-3 text-5xl font-bold tracking-tight">
-            RefGen
-          </h1>
-
-
+          <h1 className="mb-3 text-5xl font-bold tracking-tight">RefGen</h1>
           <p className="text-lg leading-relaxed text-gray-700">
             генератор ссылок для библиографии
             <br />
             для студентов СПбГЭУ
           </p>
-
-
           <span className="mt-5 inline-flex rounded-full bg-[#B8FF00] px-4 py-2 text-sm font-medium text-gray-900">
             бесплатно · без лимита генераций
           </span>
@@ -202,7 +291,7 @@ export default function Home() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             placeholder={
-              'https://example.com/article\nhttps://example.com/book'
+              'https://cyberleninka.ru/article/...\nдмитрий кот — копирайтинг как профессия'
             }
             rows={6}
             required
@@ -219,8 +308,8 @@ export default function Home() {
             id="sources-hint"
             className="mt-2 text-sm leading-relaxed text-gray-600"
           >
-            можно сразу несколько — каждая ссылка с новой строки.
-            обрабатываем по очереди, результаты появляются ниже
+            можно вставить ссылку на сайт или написать автора и название книги
+            через тире — каждый источник с новой строки
           </p>
 
 
@@ -261,8 +350,6 @@ export default function Home() {
             <h2 className="font-semibold text-red-900">
               эти источники не получилось обработать
             </h2>
-
-
             <ul className="mt-3 space-y-3">
               {errors.map((item, index) => (
                 <li
@@ -274,10 +361,8 @@ export default function Home() {
                 </li>
               ))}
             </ul>
-
-
             <p className="mt-4 text-sm text-red-900">
-              остальные результаты сохранены ниже. неудачные ссылки
+              остальные результаты сохранены ниже. неудачные источники
               можно отправить ещё раз отдельно
             </p>
           </section>
@@ -287,9 +372,14 @@ export default function Home() {
         {citations.length > 0 && (
           <section className="mt-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold">
-                твой список · {citations.length}
-              </h2>
+              <div>
+                <h2 className="text-xl font-semibold">
+                  твой список · {citations.length}
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  сохранено в браузере — список останется после перезагрузки
+                </p>
+              </div>
 
 
               <div className="flex flex-wrap gap-3">
@@ -309,7 +399,7 @@ export default function Home() {
                   disabled={loading}
                   className="rounded-lg border border-gray-400 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  очистить результаты
+                  очистить сессию
                 </button>
               </div>
             </div>
@@ -321,23 +411,30 @@ export default function Home() {
             </p>
 
 
-            {citations.map((item) => (
-              <CitationResult
-                key={item.id}
-                citation={item.citation}
-              />
-            ))}
+            <ol className="mt-4 space-y-3 list-none">
+              {citations.map((item, index) => (
+                <CitationResult
+                  key={item.id}
+                  index={index + 1}
+                  citation={item.citation}
+                />
+              ))}
+            </ol>
           </section>
         )}
 
 
         <footer className="mt-12 flex items-center justify-center gap-2 text-sm text-gray-600">
           <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-            <path fillRule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd"/>
+            <path
+              fillRule="evenodd"
+              d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z"
+              clipRule="evenodd"
+            />
           </svg>
-          <a 
-            href="https://t.me/iknowhellsip" 
-            target="_blank" 
+          <a
+            href="https://t.me/iknowhellsip"
+            target="_blank"
             rel="noopener noreferrer"
             className="hover:text-[#26B38C] transition-colors"
           >
