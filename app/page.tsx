@@ -251,6 +251,15 @@ export default function Home() {
           setProgress({ done: index + 1, total: lines.length });
         }
       }
+
+
+      // Сортируем весь список по алфавиту после обработки всех источников
+      setCitations((previous) => {
+        const sorted = [...previous].sort((a, b) =>
+          a.citation.localeCompare(b.citation, 'ru', { sensitivity: 'base' }),
+        );
+        return sorted;
+      });
     } finally {
       running.current = false;
       setLoading(false);
@@ -363,6 +372,35 @@ export default function Home() {
                 : ''}
           </p>
         </form>
+
+
+        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-5 text-sm leading-relaxed text-gray-700">
+          <h2 className="mb-2 font-semibold text-gray-900">
+            требования к оформлению — п. 6.8.5 методических указаний СПбГЭУ
+          </h2>
+          <p>
+            библиографические описания для списков составляются по стандартам:
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            <li>
+              ГОСТ Р 7.0.100-2018 «Библиографическая запись. Библиографическое
+              описание. Общие требования и правила составления»
+            </li>
+            <li>
+              ГОСТ 7.80—2000 «Библиографическая запись. Заголовок. Общие
+              требования и правила составления»
+            </li>
+            <li>
+              ГОСТ 7.0.5-2008 «Библиографическая ссылка. Общие требования и
+              правила составления»
+            </li>
+            <li>
+              ГОСТ Р 7.0.108-2022 «Библиографические ссылки на электронные
+              документы, размещённые в информационно-телекоммуникационных
+              сетях. Общие требования к составлению и оформлению»
+            </li>
+          </ul>
+        </section>
 
 
         {notice && (
